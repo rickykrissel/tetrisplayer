@@ -43,6 +43,57 @@ class myai:
     def __lt__(self, other):
         return (self.fit_score<other.fit_score)
 
+    def cost(self, board, x, y, piece):
+        """
+        COST = #holes + max height
+        """
+
+        board_copy = deepcopy(board)
+
+        for pos in piece.body:
+            board_copy[y + pos[1]][x + pos[0]] = True
+
+        holes = 0
+        max_height = 0
+        num_cleared = 0
+        cum_wells = 0
+        for i in range(len(board_copy)):
+            if all(board_copy[i]):
+                num_cleared += 1
+            for j in range(len(board_copy[0])):
+
+                if board_copy[i][j]:
+                    max_height = max(max_height, i)
+                    continue
+                has = False
+                for k in range(i + 1, len(board_copy)):
+                    if board_copy[k][j]:
+                        has = True
+                        break
+                if has:
+                    holes += 1
+
+        agg_height = 0
+        for col in range(len(board_copy[i])):
+            agg = 0
+            for row in range(len(board_copy)):
+                if board_copy[row][col]:
+                    agg = row
+            agg_height += agg
+        heights = []
+        for col in range(len(board_copy[i])):
+            mh = 0
+            for row in range(len(board_copy)):
+                if board_copy[row][col]:
+                    mh = row
+            heights.append(mh)
+        bumpiness = 0
+        for i in range(len(heights) - 1):
+            bumpiness += abs(heights[i] - heights[i + 1])
+
+        #c = 0.5 * agg_height + 0.35 * holes + 0.18 * bumpiness - 0.76 * num_cleared
+        c = agg_height + holes + bumpiness - num_cleared
+        return c
     def get_best_move(self, board, piece):
     
         best_x = -1000
@@ -67,5 +118,11 @@ class myai:
                 if c > max_value:
                     max_value = c
                     best_x = x
+                    best_piece = piece
+                c2 = self.cost(board.board, x, y, piece)
+                if c2 < min_cost:
+                    min_cost = c2
+                    best_x = x
+                    best_y = y
                     best_piece = piece
         return best_x, best_piece
