@@ -39,7 +39,7 @@ class _Bag:
         body, color = BODIES[idx]
         return Piece(body=body, color=color)
 
-_bag = _BAG()
+_bag = _Bag()
 
 class Piece:
     """
