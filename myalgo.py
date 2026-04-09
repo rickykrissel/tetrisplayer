@@ -26,7 +26,7 @@ class myai:
 
         peaks = get_peaks(board)
         holes = get_holes(peaks, board)
-        lines_cleared = int(np.sum(np.all(np_board == 1, axis=1)))
+        lines_cleared = int(np.sum(np.all(board == 1, axis=1)))
         
         features = np.array([
             np.sum(peaks),          # aggregate column height — penalise
