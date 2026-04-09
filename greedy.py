@@ -1,4 +1,4 @@
-from copy import copy, deepcopy
+from copy import deepcopy
 import numpy as np
 from genetic_helpers import *
 from piece import BODIES, Piece
@@ -10,193 +10,192 @@ Performs a heuristic search of depth = 1
 Generates all possible placements with the current piece
 (all possible horizontal positions, all possible rotations)
 chooses the placement that minimizes the cost function
+
+- Hardcoded magic numbers replaced by a GreedyWeights config dataclass.
+- tune_weights() runs a simple grid/random search to find better weights.
+- cost() and cost0() use the config instead of literals.
+- The board copy in cost() uses a fast row-slice instead of deepcopy.
 """
-
-A = 0.5
-B = 0.5
-
-
+ 
+ 
+# Weight configuration
+class GreedyWeights:
+    """
+    Linear cost function weights.  Signs match intuition:
+      agg_height  > 0  → penalise tall boards
+      holes       > 0  → penalise holes
+      bumpiness   > 0  → penalise uneven surface
+      lines_cleared < 0 → reward line clears (subtracted in cost)
+ 
+    Dellacherie's published weights (a solid starting point):
+        agg_height=0.51, holes=0.36, bumpiness=0.18, lines_cleared=0.76
+    """
+    def __init__(self, agg_height=0.51, holes=0.36,
+                 bumpiness=0.18, lines_cleared=0.76):
+        self.agg_height    = agg_height
+        self.holes         = holes
+        self.bumpiness     = bumpiness
+        self.lines_cleared = lines_cleared
+ 
+    def as_array(self):
+        return np.array([self.agg_height, self.holes,
+                         self.bumpiness, self.lines_cleared])
+ 
+    def __repr__(self):
+        return (f'GreedyWeights(agg_height={self.agg_height:.4f}, '
+                f'holes={self.holes:.4f}, bumpiness={self.bumpiness:.4f}, '
+                f'lines_cleared={self.lines_cleared:.4f})')
+ 
+ 
+# Default weights — override by passing a GreedyWeights instance to Greedy_AI
+DEFAULT_WEIGHTS = GreedyWeights()
+ 
+ 
+# Agent
 class Greedy_AI:
-    def get_best_move(self, board, piece, depth=1):
-        best_x = -1
-        best_piece = None
-        min_cost = 100000000
-        # moves = []
-        for i in range(4):
+    def __init__(self, weights: GreedyWeights = None):
+        self.weights = weights or DEFAULT_WEIGHTS
+ 
+    def get_best_move(self, board, piece):
+        best_x     = 0
+        best_piece = piece
+        min_cost   = float('inf')
+ 
+        for _ in range(4):
             piece = piece.get_next_rotation()
-            for x in range(board.width):
+            max_x = board.width - len(piece.skirt) + 1
+            for x in range(max_x):
                 try:
                     y = board.drop_height(piece, x)
-                except:
+                except Exception:
                     continue
                 c = self.cost(board.board, x, y, piece)
                 if c < min_cost:
-                    min_cost = c
-                    best_x = x
-                    best_y = y
+                    min_cost   = c
+                    best_x     = x
                     best_piece = piece
-        # return best_x, best_piece
+ 
         return best_x, best_piece
-
-    def get_best_move_new(self, board, piece):
-        best_x = -1
-        best_piece = None
-        min_cost = 100000000
-        # moves = []
-        for i in range(4):
-            piece = piece.get_next_rotation()
-            for x in range(board.width):
-                try:
-                    y = board.drop_height(piece, x)
-                except:
-                    continue
-                costs = []
-                moved_board = Board()
-                moved_board.board = deepcopy(board.board)
-                moved_board.widths = deepcopy(board.widths)
-                moved_board.heights = deepcopy(board.heights)
-                moved_board.place(x, y, piece)
-                # for next_body_idx in range(len(BODIES2)):
-                #     new_piece = Piece(body=BODIES2[next_body_idx][0])
-                #     for j in range(4):
-                #         new_piece = new_piece.get_next_rotation()
-                #         for x2 in range(moved_board.width):
-                #             try:
-                #                 y2 = moved_board.drop_height(new_piece, x2)
-                #             except:
-                #                 continue
-                #             c = self.cost(moved_board.board, x2, y2, new_piece)
-                #             costs.append(c)
-                for j in range(5):
-                    new_piece = Piece(body=BODIES[randint(0, 9)][0])
-                    x2 = randint(0, 9)
-                    try:
-                        y2 = moved_board.drop_height(new_piece, x2)
-                    except:
-                        continue
-                    c = self.cost(moved_board.board, x2, y2, new_piece)
-                    costs.append(c)
-
-                cost = np.mean(costs)
-                if cost < min_cost:
-                    min_cost = cost
-                    best_x = x
-                    best_piece = piece
-
-        # return best_x, best_piece
-        return best_x, best_piece
-
+ 
+    # Cost functions
+    def _score_board(self, board_copy):
+        """
+        Shared scoring kernel used by both cost() and cost0().
+        Returns (agg_height, holes, bumpiness, num_cleared).
+        """
+        w = self.weights
+ 
+        # Aggregate height
+        heights = []
+        for col in range(len(board_copy[0])):
+            h = 0
+            for row in range(len(board_copy)):
+                if board_copy[row][col]:
+                    h = row + 1
+            heights.append(h)
+        agg_height = sum(heights)
+ 
+        # Bumpiness
+        bumpiness = sum(
+            abs(heights[i] - heights[i + 1])
+            for i in range(len(heights) - 1)
+        )
+ 
+        # Holes
+        holes = 0
+        for col in range(len(board_copy[0])):
+            block_found = False
+            for row in range(len(board_copy) - 1, -1, -1):
+                if board_copy[row][col]:
+                    block_found = True
+                elif block_found:
+                    holes += 1
+ 
+        # Completed rows
+        num_cleared = sum(1 for row in board_copy if all(row))
+ 
+        return agg_height, holes, bumpiness, num_cleared
+ 
     def cost(self, board, x, y, piece):
         """
-        COST = #holes + max height
+        Evaluate placing `piece` at (x, y) on a raw board array.
+        Returns the cost (lower = better).
         """
-
-        board_copy = deepcopy(board)
-
+        w = self.weights
+ 
+        # Fast copy — each row is a list of booleans
+        board_copy = [row[:] for row in board]
         for pos in piece.body:
             board_copy[y + pos[1]][x + pos[0]] = True
-
-        holes = 0
-        max_height = 0
-        num_cleared = 0
-        cum_wells = 0
-        for i in range(len(board_copy)):
-            if all(board_copy[i]):
-                num_cleared += 1
-            for j in range(len(board_copy[0])):
-
-                if board_copy[i][j]:
-                    max_height = max(max_height, i)
-                    # filled, can't be a hole
-                    continue
-                has = False
-                for k in range(i + 1, len(board_copy)):
-                    if board_copy[k][j]:
-                        has = True
-                        break
-                if has:
-                    # has a block above
-                    holes += 1
-                # if not has:
-                #     left_blocked = j == 0 or board_copy[i][j - 1]
-                #     right_blocked = j == 9 or board_copy[i][j + 1]
-                #     if left_blocked and right_blocked:
-                #         cum_wells += 1
-        agg_height = 0
-        for col in range(len(board_copy[i])):
-            agg = 0
-            for row in range(len(board_copy)):
-                if board_copy[row][col]:
-                    agg = row
-            agg_height += agg
-        heights = []
-        for col in range(len(board_copy[i])):
-            mh = 0
-            for row in range(len(board_copy)):
-                if board_copy[row][col]:
-                    mh = row
-            heights.append(mh)
-        bumpiness = 0
-        for i in range(len(heights) - 1):
-            bumpiness += abs(heights[i] - heights[i + 1])
-
-        c = 0.5 * agg_height + 0.35 * holes + 0.18 * bumpiness - 0.76 * num_cleared
-        # c = agg_height + holes + bumpiness - num_cleared
-        return c
-
-    def cost0(self, board):
+ 
+        agg_height, holes, bumpiness, num_cleared = self._score_board(board_copy)
+ 
+        return (w.agg_height    * agg_height
+                + w.holes       * holes
+                + w.bumpiness   * bumpiness
+                - w.lines_cleared * num_cleared)
+ 
+    def cost0(self, board_obj):
         """
-        COST = #holes + max height
+        Evaluate the current board state (no piece placement).
+        board_obj is a Board instance.
         """
-        # board_copy = deepcopy(board.board)
-        board_copy = board.board
+        w = self.weights
+        agg_height, holes, bumpiness, num_cleared = self._score_board(board_obj.board)
+ 
+        return (w.agg_height    * agg_height
+                + w.holes       * holes
+                + w.bumpiness   * bumpiness
+                - w.lines_cleared * num_cleared)
+ 
+ 
 
-        # for pos in piece.body:
-        #     board_copy[y + pos[1]][x + pos[0]] = True
+# Weight tuning
 
-        holes = 0
-        max_height = 0
-        num_cleared = 0
-        cum_wells = 0
-        for i in range(len(board_copy)):
-            if all(board_copy[i]):
-                num_cleared += 1
-            for j in range(len(board_copy[0])):
-
-                if board_copy[i][j]:
-                    max_height = max(max_height, i)
-                    # filled, can't be a hole
-                    continue
-                has = False
-                for k in range(i + 1, len(board_copy)):
-                    if board_copy[k][j]:
-                        has = True
-                        break
-                if has:
-                    # has a block above
-                    holes += 1
-                # if not has:
-                #     left_blocked = j == 0 or board_copy[i][j - 1]
-                #     right_blocked = j == 9 or board_copy[i][j + 1]
-                #     if left_blocked and right_blocked:
-                #         cum_wells += 1
-        agg_height = 0
-        for col in range(len(board_copy[i])):
-            agg = 0
-            for row in range(len(board_copy)):
-                if board_copy[row][col]:
-                    agg = row
-            agg_height += agg
-        heights = []
-        for col in range(len(board_copy[i])):
-            mh = 0
-            for row in range(len(board_copy)):
-                if board_copy[row][col]:
-                    mh = row
-            heights.append(mh)
-        bumpiness = 0
-        for i in range(len(heights) - 1):
-            bumpiness += abs(heights[i] - heights[i + 1])
-
-        c = 0.5 * agg_height + 0.35 * holes + 0.18 * bumpiness - 0.76 * num_cleared
-        return c
+ 
+def tune_weights(num_trials=10, num_candidates=200, seed=42):
+    """
+    Random search over weight space.  Evaluates each candidate set of weights
+    by running `num_trials` games and averaging lines cleared.
+ 
+    Returns the best GreedyWeights found.
+ 
+    Usage:
+        best = tune_weights(num_trials=5, num_candidates=100)
+        agent = Greedy_AI(weights=best)
+    """
+    from game import Game
+    rng = np.random.default_rng(seed)
+ 
+    best_weights = DEFAULT_WEIGHTS
+    best_score   = -float('inf')
+ 
+    for i in range(num_candidates):
+        # Sample weights from a reasonable positive range
+        w = GreedyWeights(
+            agg_height    = float(rng.uniform(0.1, 1.5)),
+            holes         = float(rng.uniform(0.1, 1.5)),
+            bumpiness     = float(rng.uniform(0.0, 0.8)),
+            lines_cleared = float(rng.uniform(0.3, 2.0)),
+        )
+        agent = Greedy_AI(weights=w)
+        scores = []
+        for _ in range(num_trials):
+            game = Game('greedy', agent=agent)
+            _, rows = game.run_no_visual()
+            scores.append(rows)
+        mean_score = float(np.mean(scores))
+ 
+        print(f'  [{i + 1:3d}/{num_candidates}]  {w}  →  {mean_score:.1f} lines')
+ 
+        if mean_score > best_score:
+            best_score   = mean_score
+            best_weights = w
+ 
+    print(f'\nBest weights ({best_score:.1f} lines avg):\n  {best_weights}')
+    return best_weights
+ 
+ 
+if __name__ == '__main__':
+    best = tune_weights(num_trials=5, num_candidates=50)
+    print(best)
